@@ -90,6 +90,30 @@ describe("format", () => {
     const text = formatFile("/p/a.c", "l1\nl2\nl3\nl4\n", 2, 3, 1000);
     expect(text).toBe("/p/a.c (lines 2-3 of 4)\n2: l2\n3: l3");
   });
+  it("states the range actually returned when a file is cut", () => {
+    const content = Array.from({ length: 200 }, (_, i) => `line ${i + 1}`).join("\n");
+    const text = formatFile("/p/a.c", content, undefined, undefined, 500);
+    const m = text.match(/\(lines 1-(\d+) of 200\)/);
+    expect(m).not.toBeNull();
+    const last = Number(m![1]);
+    expect(last).toBeLessThan(200);
+    expect(text).toContain(`start_line=${last + 1}`);
+    expect(text).toContain(`${last}: line ${last}`);
+    expect(text).not.toContain(`${last + 1}: line`);
+  });
+  it("caps matching lines per file", () => {
+    const hits = Array.from({ length: 5 }, (_, i) => ({ line: `hit ${i}`, lineNumber: String(i + 1) }));
+    const text = formatSearch({ resultCount: 1, startDocument: 0, endDocument: 0, results: { "/p/a.c": hits } }, 0, "p", { maxLinesPerFile: 2 });
+    expect(text).toContain("2: hit 1");
+    expect(text).not.toContain("3: hit 2");
+    expect(text).toContain("3 more matching line(s)");
+  });
+  it("de-duplicates repeated commit lines across files", () => {
+    const hit = { line: "abc123 msg", lineNumber: "" };
+    const text = formatSearch({ resultCount: 2, startDocument: 0, endDocument: 1, results: { "/p/a": [hit], "/p/b": [hit] } }, 0, "p", { dedupeLines: true });
+    expect(text.match(/abc123 msg/g)).toHaveLength(1);
+    expect(text).not.toContain("/p/b");
+  });
   it("truncates large files with a hint", () => {
     expect(formatFile("/p/a.c", "x".repeat(500), undefined, undefined, 50)).toContain("[truncated at 50 characters");
   });

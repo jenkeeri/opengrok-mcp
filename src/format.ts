@@ -20,7 +20,19 @@ export function truncate(text: string, limit: number, hint: string): string {
   return `${text.slice(0, limit)}\n\n[truncated at ${limit} characters. ${hint}]`;
 }
 
-export function formatSearch(r: SearchResponse, start: number, scope: string): string {
+export interface FormatSearchOptions {
+  /** Max matching lines shown per file (default 10); the rest are summarised as a count. */
+  maxLinesPerFile?: number;
+  /** Collapse identical lines across files (commit-message results repeat each commit per file). */
+  dedupeLines?: boolean;
+}
+
+export function formatSearch(
+  r: SearchResponse,
+  start: number,
+  scope: string,
+  { maxLinesPerFile = 10, dedupeLines = false }: FormatSearchOptions = {},
+): string {
   const files = Object.entries(r.results);
   if (files.length === 0) {
     return start > 0
@@ -29,12 +41,22 @@ export function formatSearch(r: SearchResponse, start: number, scope: string): s
   }
   const shownEnd = start + files.length;
   const out = [`${r.resultCount} file(s) matched in ${scope}; showing ${start + 1}-${shownEnd}:`, ""];
+  const seen = new Set<string>();
   for (const [path, hits] of files) {
-    out.push(path);
+    const lines: string[] = [];
     for (const h of hits) {
       const text = cleanLine(h.line).trim();
       if (!text || text === "...") continue;
-      out.push(h.lineNumber ? `  ${h.lineNumber}: ${text}` : `  ${text}`);
+      if (dedupeLines) {
+        if (seen.has(text)) continue;
+        seen.add(text);
+      }
+      lines.push(h.lineNumber ? `  ${h.lineNumber}: ${text}` : `  ${text}`);
+    }
+    if (dedupeLines && hits.length > 0 && lines.length === 0) continue;
+    out.push(path, ...lines.slice(0, maxLinesPerFile));
+    if (lines.length > maxLinesPerFile) {
+      out.push(`  ... ${lines.length - maxLinesPerFile} more matching line(s) in this file (read it with opengrok_get_file)`);
     }
   }
   if (shownEnd < r.resultCount) {
@@ -58,10 +80,20 @@ export function formatFile(
     return `${path} has only ${lines.length} line(s); start_line=${from} is past the end.`;
   }
   const width = String(to).length;
-  const body = lines
-    .slice(from - 1, to)
-    .map((l, i) => `${String(from + i).padStart(width)}: ${l}`)
-    .join("\n");
-  const head = `${path} (lines ${from}-${to} of ${lines.length})`;
-  return truncate(`${head}\n${body}`, limit, `Use start_line/end_line to read further (file has ${lines.length} lines)`);
+  const numbered = lines.slice(from - 1, to).map((l, i) => `${String(from + i).padStart(width)}: ${l}`);
+  // Keep whole lines within the budget so the header can state the range actually returned.
+  const budget = limit - (path.length + 64);
+  let shown = 0;
+  let used = 0;
+  for (const l of numbered) {
+    if (shown > 0 && used + l.length + 1 > budget) break;
+    used += l.length + 1;
+    shown++;
+  }
+  const last = from + shown - 1;
+  const head = `${path} (lines ${from}-${last} of ${lines.length})`;
+  const body = numbered.slice(0, shown).join("\n");
+  if (body.length > budget) return truncate(`${head}\n${body}`, limit, "A single line exceeds the limit");
+  if (shown === numbered.length) return `${head}\n${body}`;
+  return `${head}\n${body}\n\n[truncated at line ${last}. Use start_line=${last + 1} to continue (file has ${lines.length} lines)]`;
 }

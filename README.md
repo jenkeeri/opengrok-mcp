@@ -65,6 +65,10 @@ Example MCP client entry:
   `defs`, `refs`) are silently ignored by the API, which makes project filtering appear broken.
 - `type` takes an OpenGrok analyzer name (`c`, `cxx`, `java`, `python`, ...); an unknown name
   returns zero results.
+- `full` with several bare terms/phrases is OR-ed; use `AND` explicitly. `path` (and `find_file`) match per
+  path component, so a regex cannot span `/`. `hist` results are de-duplicated; a bare ticket number is exact.
+- Search output is capped at `max_lines_per_file` (default 10) lines per file; `get_file` reports the line
+  range actually returned when it cuts a file at 30000 characters.
 - `def` and `symbol` rely on OpenGrok's language-aware indexing; use `full` for file types it cannot parse.
 
 ## Development

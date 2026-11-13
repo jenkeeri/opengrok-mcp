@@ -57,12 +57,12 @@ export function registerTools(server: McpServer, client: OpenGrokClient, cfg: Co
     {
       title: "Search OpenGrok",
       description: `Search source code. Provide at least one of full, def, symbol, path, hist; fields combine with AND.
-- full: full-text Lucene query. Supports wildcards (foo*), phrases ("a b"), AND/OR/NOT (uppercase), fuzzy (word~), regex (/re/).
-- def: where a symbol is DEFINED. symbol: where a symbol is referenced or defined. Both need language-aware indexing, so they return nothing for file types OpenGrok cannot parse; fall back to full.
-- path: restrict by file path (e.g. "src/net", "*.cpp").
-- hist: search commit messages.
-- type: OpenGrok analyzer name, e.g. c, cxx, java, python, sh, xml, json, yaml, plain. An unknown name yields zero results.
-Default scope: ${defaults}. Results list files with matching lines (line numbers where available).`,
+- full: full-text Lucene query. Supports wildcards (foo*), phrases ("a b"), AND/OR/NOT (uppercase), fuzzy (word~), regex (/re/). Several bare terms or phrases are OR-ed, not AND-ed: write "a" AND "b" to require both. Matching is token-based, so punctuation-heavy phrases (e.g. containing :: or *) can miss; search a single identifier and use path to narrow instead. Returned lines are the indexer's best snippets and may not contain every term.
+- def: where a symbol is DEFINED (token match, so def:Compose also hits Foo::Compose members; narrow with path). symbol: where a symbol is referenced or defined. Both need language-aware indexing, so they return nothing for file types OpenGrok cannot parse; fall back to full.
+- path: restrict by file path. Matched per path component, not as a prefix of the whole path: "ebpp" or "*.cpp" work; regex /re/ must match a single component (e.g. "/ebpp.*/"), never one spanning "/". If a search with path returns nothing, retry without path to see which part failed.
+- hist: search commit messages. "CSDEV" is a fuzzy word match; a bare ticket number (e.g. 53291) is exact. Commits are de-duplicated across files; only messages are returned, no diffs.
+- type: OpenGrok analyzer name, e.g. c, cxx, java, python, sh, xml, json, yaml. An unknown name (no tool lists them) yields zero results.
+Default scope: ${defaults}. Results list files with matching lines (line numbers where available), at most max_lines_per_file per file.`,
       inputSchema: {
         full: z.string().optional().describe("Full-text query."),
         def: z.string().optional().describe("Symbol whose definition to find."),
@@ -72,6 +72,7 @@ Default scope: ${defaults}. Results list files with matching lines (line numbers
         type: z.string().optional().describe("File type (analyzer name)."),
         ...projectFields,
         ...paging,
+        max_lines_per_file: z.number().int().min(1).max(200).optional().describe("Matching lines shown per file (default 10); extra lines are summarised as a count."),
       },
       annotations: READ_ONLY,
     },
@@ -86,7 +87,14 @@ Default scope: ${defaults}. Results list files with matching lines (line numbers
           full: a.full, def: a.def, symbol: a.symbol, path: a.path, hist: a.hist, type: a.type,
           projects, maxResults: a.max_results ?? 20, start,
         });
-        return ok(truncate(formatSearch(r, start, scopeLabel(projects)), RESPONSE_LIMIT, "Narrow with path, type or project"));
+        let text = formatSearch(r, start, scopeLabel(projects), {
+          maxLinesPerFile: a.max_lines_per_file,
+          dedupeLines: Boolean(a.hist) && !a.full && !a.def && !a.symbol,
+        });
+        if (r.resultCount === 0 && start === 0 && a.path) {
+          text += ` The path filter '${a.path}' may be the cause (it matches per path component); retry without it.`;
+        }
+        return ok(truncate(text, RESPONSE_LIMIT, "Narrow with path, type or project, or lower max_lines_per_file"));
       } catch (err) {
         return fail(err);
       }
@@ -98,7 +106,8 @@ Default scope: ${defaults}. Results list files with matching lines (line numbers
     {
       title: "Find files in OpenGrok",
       description: `Find files by path or file name. Returns file paths only.
-Examples: "main.cpp" (name), "*.sql" (wildcard), "src/net" (directory), "/.*test.*\\.py/" (regex).
+Examples: "main.cpp" (name), "*.sql" (wildcard), "/test.*/" (regex).
+Matching is per path component and substring-like: a directory-like pattern such as "src/net" also returns docs and images under it, so add type or a file-name wildcard. A regex must match one component and cannot span "/".
 Default scope: ${defaults}.`,
       inputSchema: {
         path_pattern: z.string().min(1).describe("Path or name pattern."),
