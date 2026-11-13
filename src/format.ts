@@ -25,13 +25,15 @@ export interface FormatSearchOptions {
   maxLinesPerFile?: number;
   /** Collapse identical lines across files (commit-message results repeat each commit per file). */
   dedupeLines?: boolean;
+  /** Raw files consumed from OpenGrok when some were dropped by an exact path check; default: files shown. */
+  consumed?: number;
 }
 
 export function formatSearch(
   r: SearchResponse,
   start: number,
   scope: string,
-  { maxLinesPerFile = 10, dedupeLines = false }: FormatSearchOptions = {},
+  { maxLinesPerFile = 10, dedupeLines = false, consumed }: FormatSearchOptions = {},
 ): string {
   const files = Object.entries(r.results);
   if (files.length === 0) {
@@ -39,7 +41,7 @@ export function formatSearch(
       ? `No more results (total ${r.resultCount} file(s) in ${scope}).`
       : `No results in ${scope}.`;
   }
-  const shownEnd = start + files.length;
+  const shownEnd = start + (consumed ?? files.length);
   const out = [`${r.resultCount} file(s) matched in ${scope}; showing ${start + 1}-${shownEnd}:`, ""];
   const seen = new Set<string>();
   for (const [path, hits] of files) {
